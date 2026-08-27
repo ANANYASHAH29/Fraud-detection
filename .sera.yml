@@ -1,0 +1,14 @@
+# Real .sera.yml for this repo, mapping actual files to SERA's risk
+# categories. Category names use the F1-F5/D1 prefix convention but the
+# descriptive suffix is just for readability -- SERA matches on the
+# leading token only.
+risk_categories:
+  F1_data_split:
+    - "train.py"       # holds the train_test_split call + model hyperparameters
+  F5_checkpoint:
+    - "model.pkl"       # the persisted trained model artifact
+  F3_evaluation:
+    - "canary_eval.py"    # the canary evaluation logic itself
+
+canary:
+  entrypoint: "canary_eval.py"
