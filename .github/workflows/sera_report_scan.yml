@@ -1,0 +1,39 @@
+# Copy this into YOUR repo at .github/workflows/sera_report_scan.yml,
+# alongside scripts/report_scan.py copied to .github/scripts/report_scan.py
+# (see SERA's Settings page for your repo's exact SERA_REPO_ID and
+# SERA_REPORT_TOKEN to add as repo secrets).
+#
+# This runs entirely in YOUR repo's own CI, with YOUR own dependencies --
+# SERA never sees or executes your code, only the accuracy/confidence
+# numbers this step reports.
+name: SERA scan report
+
+on:
+  schedule:
+    - cron: "0 */6 * * *" # catches drift between merges, which no PR triggers
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  report-to-sera:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      # Install YOUR pipeline's own dependencies here, however your repo
+      # normally does it (requirements.txt, poetry, etc.) -- this is what
+      # makes the canary run be YOUR real code with YOUR real deps.
+      - name: Install dependencies
+        run: pip install -r requirements.txt pyyaml
+
+      - name: Report scan to SERA
+        env:
+          SERA_DASHBOARD_URL: ${{ vars.SERA_DASHBOARD_URL }}
+          SERA_REPO_ID: ${{ secrets.SERA_REPO_ID }}
+          SERA_REPORT_TOKEN: ${{ secrets.SERA_REPORT_TOKEN }}
+        run: python .github/scripts/report_scan.py
