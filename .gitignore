@@ -1,0 +1,14 @@
+# Standard Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+*.log
+
+# NOTE: model.pkl and test_set.csv are intentionally NOT ignored here --
+# they need to be committed so the repo is a self-contained, runnable
+# demo of SERA's canary evaluation contract.
