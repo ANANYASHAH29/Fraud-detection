@@ -1,7 +1,7 @@
-"""Canary evaluation entrypoint: loads the persisted model + held-out
-test set, evaluates it, and prints exactly one line of JSON describing
-the result. This is the contract a repo-agnostic scanner can detect and
-auto-generate a draft of (see SERA's repo-scanner feature).
+"""Auto-generated draft by SERA's repo scanner. Review before running --
+this is a starting point, not a verified-correct script. Edit the model
+path, test-set path, and label column name below if they're wrong for
+your repo.
 """
 import hashlib
 import json
@@ -10,6 +10,10 @@ import joblib
 import numpy as np
 import pandas as pd
 
+MODEL_PATH = "model.pkl"
+TEST_SET_PATH = "test_set.csv"
+LABEL_COLUMN = "label"  # EDIT if your held-out CSV uses a different column name
+
 
 def shannon_entropy(probs: np.ndarray) -> np.ndarray:
     eps = 1e-12
@@ -17,15 +21,15 @@ def shannon_entropy(probs: np.ndarray) -> np.ndarray:
 
 
 def main():
-    model = joblib.load("model.pkl")
+    model = joblib.load(MODEL_PATH)
 
-    with open("test_set.csv", "rb") as f:
+    with open(TEST_SET_PATH, "rb") as f:
         raw_bytes = f.read()
     canary_set_hash = hashlib.sha256(raw_bytes).hexdigest()
 
-    test_df = pd.read_csv("test_set.csv")
-    y_test = test_df["label"].values
-    X_test = test_df.drop(columns=["label"]).values
+    test_df = pd.read_csv(TEST_SET_PATH)
+    y_test = test_df[LABEL_COLUMN].values
+    X_test = test_df.drop(columns=[LABEL_COLUMN]).values
 
     predictions = model.predict(X_test)
     probabilities = model.predict_proba(X_test)
