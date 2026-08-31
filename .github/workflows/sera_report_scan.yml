@@ -21,6 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          # full history, not the default shallow clone -- the controlled-
+          # intervention step needs to read a suspect commit's PARENT
+          # version of a file (git show HEAD^:<path>), which a depth-1
+          # checkout has no parent commit to satisfy.
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
