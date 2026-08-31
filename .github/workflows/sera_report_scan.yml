@@ -35,7 +35,7 @@ jobs:
 
       - name: Report scan to SERA
         env:
-          SERA_DASHBOARD_URL: ${{ vars.SERA_DASHBOARD_URL }}
+          SERA_DASHBOARD_URL: ${{ secrets.SERA_DASHBOARD_URL }}
           SERA_REPO_ID: ${{ secrets.SERA_REPO_ID }}
           SERA_REPORT_TOKEN: ${{ secrets.SERA_REPORT_TOKEN }}
         run: python .github/scripts/report_scan.py
