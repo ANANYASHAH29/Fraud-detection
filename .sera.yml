@@ -11,6 +11,8 @@ risk_categories:
     - "canary_eval.py"    # the canary evaluation logic itself
   F2_label_mapping:
     - "label_mapping.py"    # post-prediction class/label remap
+  F4_preprocessing:
+    - "preprocess.py"    # normalization + clip-range constants
 
 canary:
   entrypoint: "canary_eval.py"

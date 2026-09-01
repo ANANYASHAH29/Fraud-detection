@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from label_mapping import LABEL_MAP
+from preprocess import normalize
 
 MODEL_PATH = "model.pkl"
 TEST_SET_PATH = "test_set.csv"
@@ -33,8 +34,9 @@ def main():
     y_test = test_df[LABEL_COLUMN].values
     X_test = test_df.drop(columns=[LABEL_COLUMN]).values
 
-    raw_predictions = model.predict(X_test)
-    probabilities = model.predict_proba(X_test)
+    X_normalized = normalize(X_test)
+    raw_predictions = model.predict(X_normalized)
+    probabilities = model.predict_proba(X_normalized)
 
     # Confidence/entropy come from the model's own raw probabilities --
     # computed BEFORE the label remap below, so they reflect the model's
