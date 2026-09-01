@@ -9,6 +9,8 @@ risk_categories:
     - "model.pkl"       # the persisted trained model artifact
   F3_evaluation:
     - "canary_eval.py"    # the canary evaluation logic itself
+  F2_label_mapping:
+    - "label_mapping.py"    # post-prediction class/label remap
 
 canary:
   entrypoint: "canary_eval.py"

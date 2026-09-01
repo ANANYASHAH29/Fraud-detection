@@ -10,6 +10,8 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from label_mapping import LABEL_MAP
+
 MODEL_PATH = "model.pkl"
 TEST_SET_PATH = "test_set.csv"
 LABEL_COLUMN = "label"  # EDIT if your held-out CSV uses a different column name
@@ -31,12 +33,17 @@ def main():
     y_test = test_df[LABEL_COLUMN].values
     X_test = test_df.drop(columns=[LABEL_COLUMN]).values
 
-    predictions = model.predict(X_test)
+    raw_predictions = model.predict(X_test)
     probabilities = model.predict_proba(X_test)
 
-    per_sample_correct = (predictions == y_test)
+    # Confidence/entropy come from the model's own raw probabilities --
+    # computed BEFORE the label remap below, so they reflect the model's
+    # actual certainty, untouched by a mapping bug applied downstream.
     per_sample_confidence = probabilities.max(axis=1)
     per_sample_entropy = shannon_entropy(probabilities)
+
+    predictions = np.array([LABEL_MAP[int(p)] for p in raw_predictions])
+    per_sample_correct = (predictions == y_test)
 
     accuracy = float(per_sample_correct.mean())
     mean_confidence = float(per_sample_confidence.mean())
