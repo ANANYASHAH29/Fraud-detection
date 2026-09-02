@@ -7,4 +7,4 @@ non-CV pipeline. `train.py` produces `model.pkl` + `test_set.csv`;
 `canary_eval.py` evaluates them and prints the JSON contract SERA reads.
 
 Held-out canary set: `test_set.csv` (114 samples, sampled at train time).
-Auth: AS
+Auth: Ana
