@@ -7,6 +7,14 @@ own .sera.yml, running with your own dependencies in your own CI
 environment) and POST the result to SERA's dashboard. It never sends
 your code, only the resulting accuracy/confidence numbers.
 
+On a regression, it also runs the controlled-intervention sequence: each
+of the top few ranked candidate commits is reverted and re-measured
+INDIVIDUALLY (never all at once first), and only if none alone restores
+the baseline does it try the COMBINED revert of every candidate that
+showed real individual improvement. All of this still runs entirely in
+the tenant's own CI (same checkout, same dependencies) -- it is not SERA
+executing anything on its own infrastructure.
+
 Required environment variables (set as repo secrets, never checked in):
     SERA_DASHBOARD_URL   e.g. https://your-sera-instance.example.com
     SERA_REPO_ID         the numeric id from your SERA dashboard's Settings page
@@ -35,6 +43,11 @@ def load_canary_entrypoint() -> str:
     return entrypoint
 
 
+def current_head_sha() -> str | None:
+    proc = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
 def run_canary(entrypoint: str) -> dict:
     command = ["python", entrypoint] if entrypoint.endswith(".py") else [entrypoint]
     proc = subprocess.run(command, capture_output=True, text=True, timeout=1800)
@@ -50,26 +63,23 @@ def _extract_metric(result: dict) -> float:
     return result["primary_metric"] if "task_type" in result else result["accuracy"]
 
 
-def run_intervention(entrypoint: str, commit_sha: str, files_changed: list) -> tuple[list, float] | None:
-    """The controlled-intervention step: revert exactly the suspect
-    commit's flagged files to their state at the PARENT of `commit_sha`
-    (not necessarily HEAD -- the scheduled/drift-catching trigger can flag
-    a commit that isn't the tip), re-run the same canary entrypoint, and
-    report whether accuracy recovers. This still runs entirely in the
-    tenant's own CI (same checkout, same dependencies) -- it is not SERA
-    re-executing anything on its own infrastructure, just a second call to
-    the same script the tenant already trusts to run.
+def revert_and_measure(entrypoint: str, file_commit_pairs: list[tuple[str, str]]) -> tuple[list, float] | None:
+    """Reverts each (path, commit_sha) pair to that commit's PARENT
+    version, re-runs the canary once, and always restores the working
+    tree afterward -- regardless of success or failure. A pair list can
+    span multiple different commits (the combined-revert case), each
+    file reverted relative to its OWN commit's parent.
 
-    Returns (files_actually_reverted, after_metric), or None if the revert
-    itself wasn't possible (e.g. shallow clone with no parent commit) --
-    that degrades to "no validation available", not a failed report.
+    Returns (files_actually_reverted, after_metric), or None if none of
+    the files could be reverted at all (e.g. shallow clone with no
+    parent commit) -- that degrades to "no attempt recorded", not a
+    failed report.
     """
     reverted = []
+    all_paths = [p for p, _ in file_commit_pairs]
     try:
-        for path in files_changed:
-            proc = subprocess.run(
-                ["git", "show", f"{commit_sha}^:{path}"], capture_output=True, timeout=60
-            )
+        for path, commit_sha in file_commit_pairs:
+            proc = subprocess.run(["git", "show", f"{commit_sha}^:{path}"], capture_output=True, timeout=60)
             if proc.returncode != 0:
                 continue  # e.g. file didn't exist before this commit -- nothing to revert
             with open(path, "wb") as f:
@@ -82,23 +92,73 @@ def run_intervention(entrypoint: str, commit_sha: str, files_changed: list) -> t
         after_result = run_canary(entrypoint)
         return reverted, _extract_metric(after_result)
     finally:
-        # Always restore the working tree to what was actually committed,
-        # regardless of success/failure above -- this runner's checkout
-        # should never be left mid-revert.
-        subprocess.run(["git", "checkout", "--", *files_changed], capture_output=True)
+        subprocess.run(["git", "checkout", "--", *all_paths], capture_output=True)
 
 
-def report_validation(dashboard_url: str, repo_id: str, token: str, scan_id: int, files_reverted: list, after_metric: float) -> dict:
+def run_intervention_sequence(entrypoint: str, candidates: list[dict], before_metric: float) -> list[dict]:
+    """Tries each candidate INDIVIDUALLY first (never all at once). Stops
+    as soon as one alone restores the baseline (checked server-side; here
+    we just keep going through all candidates regardless, since we don't
+    know the regression threshold client-side -- an extra attempt or two
+    costs a few seconds, not correctness). If nothing tested individually
+    fully explains it, tries the COMBINED revert of every candidate that
+    showed *some* real improvement on its own -- never blindly all of
+    them, and never ones that showed zero individual improvement.
+    """
+    attempts = []
+    contributing_pairs: list[tuple[str, str]] = []  # (path, commit_sha) for the combined attempt
+
+    for cand in candidates:
+        sha = cand.get("commit_sha")
+        files = cand.get("files_changed") or []
+        if not sha or not files:
+            continue
+        outcome = revert_and_measure(entrypoint, [(f, sha) for f in files])
+        if outcome is None:
+            continue
+        reverted, after_metric = outcome
+        print(f"  [{sha[:10]}] reverted {reverted} -> metric={after_metric}")
+        attempts.append(
+            {
+                "commit_sha": sha,
+                "stage_label": cand.get("stage_label"),
+                "files_reverted": reverted,
+                "after_metric": after_metric,
+                "combined": False,
+            }
+        )
+        if after_metric > before_metric + 0.01:
+            contributing_pairs.extend((f, sha) for f in reverted)
+
+    if len(contributing_pairs) > 1:
+        # More than one candidate individually helped but none alone was
+        # enough -- try restoring all of them together in one combined
+        # measurement. This is the only place multiple commits' files are
+        # ever reverted simultaneously, and only because each was already
+        # shown, individually, to move the metric in the right direction.
+        outcome = revert_and_measure(entrypoint, contributing_pairs)
+        if outcome is not None:
+            reverted, after_metric = outcome
+            print(f"  [combined: {sorted({s for _, s in contributing_pairs})}] reverted {reverted} -> metric={after_metric}")
+            attempts.append(
+                {
+                    "commit_sha": ",".join(sorted({s for _, s in contributing_pairs})),
+                    "stage_label": "combined",
+                    "files_reverted": reverted,
+                    "after_metric": after_metric,
+                    "combined": True,
+                }
+            )
+
+    return attempts
+
+
+def report_validation_sequence(dashboard_url: str, repo_id: str, token: str, scan_id: int, interventions: list[dict]) -> dict:
     body = json.dumps(
-        {
-            "report_token": token,
-            "scan_id": scan_id,
-            "files_reverted": files_reverted,
-            "after_metric": after_metric,
-        }
+        {"report_token": token, "scan_id": scan_id, "interventions": interventions}
     ).encode()
     req = urllib.request.Request(
-        f"{dashboard_url.rstrip('/')}/report/{repo_id}/validate-scan",
+        f"{dashboard_url.rstrip('/')}/report/{repo_id}/validate-scan-sequence",
         data=body,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -145,29 +205,31 @@ def main():
     else:
         print(f"accuracy={result.get('accuracy')}  mean_confidence={result.get('mean_confidence')}")
 
+    head_sha = current_head_sha()
+    if head_sha:
+        result["head_sha"] = head_sha
+
     response = report(dashboard_url, repo_id, token, result)
     print(f"reported to SERA: {response}")
 
     if response.get("status") == "incident":
         print("::warning::SERA detected a regression -- check your dashboard for the ranked cause.")
 
-        top_candidate = response.get("top_candidate")
-        if top_candidate and top_candidate.get("files_changed") and top_candidate.get("commit_sha"):
-            print(f"running controlled intervention on {top_candidate['files_changed']}...")
-            outcome = run_intervention(
-                entrypoint, top_candidate["commit_sha"], top_candidate["files_changed"]
-            )
-            if outcome is None:
-                print("intervention skipped -- couldn't revert the suspect files (e.g. shallow checkout)")
+        candidates = response.get("candidates") or (
+            [response["top_candidate"]] if response.get("top_candidate") else []
+        )
+        if candidates:
+            before_metric = _extract_metric(result)
+            print(f"running controlled-intervention sequence over {len(candidates)} candidate(s)...")
+            attempts = run_intervention_sequence(entrypoint, candidates, before_metric)
+            if not attempts:
+                print("intervention skipped -- couldn't revert any candidate's files (e.g. shallow checkout)")
             else:
-                files_reverted, after_metric = outcome
-                print(f"after reverting {files_reverted}: metric={after_metric}")
-                validation = report_validation(
-                    dashboard_url, repo_id, token, response["scan_id"], files_reverted, after_metric
-                )
-                print(f"reported validation to SERA: {validation}")
-                if validation.get("recovered"):
-                    print("::notice::Intervention confirmed the cause -- accuracy recovered after reverting.")
+                validation = report_validation_sequence(dashboard_url, repo_id, token, response["scan_id"], attempts)
+                print(f"reported validation sequence to SERA: {validation}")
+                verdicts = [a["verdict"] for a in validation.get("interventions", [])]
+                if any(v in ("validated", "validated_combined") for v in verdicts):
+                    print("::notice::Intervention confirmed a cause -- accuracy recovered after reverting.")
     return 0
 
 
