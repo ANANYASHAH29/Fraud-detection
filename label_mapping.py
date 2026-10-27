@@ -10,4 +10,4 @@ different failure signature than a bad checkpoint: accuracy craters
 while confidence stays exactly as high as before -- the model is just as
 "sure" of itself, only the label it's sure of got relabeled wrong.
 """
-LABEL_MAP = {0: 1, 1: 0}
+LABEL_MAP = {0: 0, 1: 1}
